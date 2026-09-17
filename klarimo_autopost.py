@@ -235,7 +235,11 @@ FORMAT INSTAGRAM/FACEBOOK :
 - Paragraphes très courts (1-3 lignes), lecture mobile.
 - Un seul appel à l'action, clair : inviter à envoyer un message privé (jamais de lien).
 - Longueur : 60 à 130 mots.
-- 5 à 10 hashtags pertinents (immobilier, fiscalité, patrimoine), en français, sans espace, sans #trop générique.
+- OBLIGATOIRE : le champ hashtags ne doit JAMAIS être vide. Toujours entre 6 et 10 hashtags pertinents et
+  spécifiques (immobilier, fiscalité, patrimoine, SCI, investissement locatif, transmission...), en français,
+  sans espace, sans accent si besoin d'unicité. Évite les hashtags trop génériques et trop concurrentiels tout
+  seuls (#immobilier utilisé seul ne sert à rien) : mélange 2-3 hashtags larges et 4-6 plus précis/de niche liés
+  au sujet exact du post (ex: #deficitfoncier, #SCIfamiliale, #plusvalueimmobiliere selon le sujet traité).
 - Les légendes Instagram et Facebook doivent être DIFFÉRENTES l'une de l'autre (angle d'attaque ou formulation
   distincte), pas de simple copier-coller entre les deux.
 
@@ -264,7 +268,13 @@ GENERATION_TOOL = {
             "visual_subtitle": {"type": "string", "description": "Sous-titre du visuel, 16 mots maximum."},
             "caption_instagram": {"type": "string"},
             "caption_facebook": {"type": "string"},
-            "hashtags": {"type": "array", "items": {"type": "string"}},
+            "hashtags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 6,
+                "maxItems": 10,
+                "description": "Jamais vide : 6 à 10 hashtags, sans le caractère #, sans espace.",
+            },
         },
         "required": [
             "angle_type", "sujet", "category_tag", "visual_title", "visual_subtitle",
@@ -293,6 +303,7 @@ parmi ceux-ci :
   toujours être "envoyer un message privé", jamais un lien).
 - Le texte contient un tiret cadratin/demi-cadratin ("—" ou "–"), ou sonne artificiel/trop léché pour un post
   écrit par un humain (phrases toutes construites sur le même modèle, transitions trop parfaites).
+- La liste de hashtags est vide, contient moins de 5 hashtags, ou n'a aucun rapport avec le sujet traité.
 
 Les remarques de style, de longueur, de répétition entre les deux légendes, ou les préférences personnelles de
 formulation vont dans "issues" pour information, MAIS NE DOIVENT JAMAIS À ELLES SEULES FAIRE PASSER approved À
@@ -312,6 +323,7 @@ REVIEW_TOOL = {
             "issues": {"type": "array", "items": {"type": "string"}},
             "corrected_caption_instagram": {"type": "string"},
             "corrected_caption_facebook": {"type": "string"},
+            "corrected_hashtags": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["approved", "issues"],
     },
@@ -353,12 +365,14 @@ def generate_content(api_key, recent_topics):
 
 
 def review_content(api_key, content):
+    hashtags_preview = ", ".join(content.get("hashtags") or []) or "(AUCUN, champ vide)"
     user_message = (
         "Voici le contenu à relire avant publication :\n\n"
         f"Titre visuel : {content['visual_title']}\n"
         f"Sous-titre visuel : {content['visual_subtitle']}\n\n"
         f"Légende Instagram :\n{content['caption_instagram']}\n\n"
-        f"Légende Facebook :\n{content['caption_facebook']}"
+        f"Légende Facebook :\n{content['caption_facebook']}\n\n"
+        f"Hashtags proposés : {hashtags_preview}"
     )
     return call_claude(api_key, REVIEW_SYSTEM_PROMPT, user_message, REVIEW_TOOL)
 
@@ -549,12 +563,16 @@ def main():
 
         log(f"Contenu rejeté : {review.get('issues')}")
         has_corrections = bool(
-            review.get("corrected_caption_instagram") or review.get("corrected_caption_facebook")
+            review.get("corrected_caption_instagram")
+            or review.get("corrected_caption_facebook")
+            or review.get("corrected_hashtags")
         )
         if review.get("corrected_caption_instagram"):
             content["caption_instagram"] = review["corrected_caption_instagram"]
         if review.get("corrected_caption_facebook"):
             content["caption_facebook"] = review["corrected_caption_facebook"]
+        if review.get("corrected_hashtags"):
+            content["hashtags"] = review["corrected_hashtags"]
 
         if attempt == max_attempts - 1:
             break
@@ -580,6 +598,20 @@ def main():
     log("Publication de l'image dans le dépôt GitHub...")
     image_url = publish_image_and_get_url(cfg["GITHUB_REPO"], relative_image_path)
     log(f"Image publique : {image_url}")
+
+    # Filet de sécurité : quoi qu'il arrive (modèle qui oublie le champ, ancienne
+    # version du contenu, etc.), un post Klarimo ne part JAMAIS sans hashtags,
+    # ça fait perdre énormément de portée sur Facebook/Instagram.
+    DEFAULT_HASHTAGS = [
+        "immobilier", "patrimoine", "fiscaliteimmobiliere", "investissementlocatif",
+        "sci", "gestionlocative", "immobilierpatrimonial", "conseilimmobilier",
+    ]
+    if not content.get("hashtags") or len(content["hashtags"]) < 5:
+        log(
+            f"AVERTISSEMENT : hashtags manquants ou insuffisants ({content.get('hashtags')}) "
+            "-> utilisation de la liste de secours."
+        )
+        content["hashtags"] = DEFAULT_HASHTAGS
 
     hashtags_str = " ".join(f"#{h.lstrip('#')}" for h in content["hashtags"])
 
