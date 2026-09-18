@@ -10,10 +10,13 @@ Ce script fait tout, sans intervention humaine, à chaque exécution :
      l'action) — s'il rejette le contenu, le script régénère une fois, puis
      abandonne la publication de ce cycle plutôt que de publier un contenu
      faible (c'est le filtre qualité qui remplace la relecture humaine).
-  3. Génère l'image de marque Klarimo correspondante (generate_visual.py).
-  4. Commit + push cette image dans CE MÊME dépôt GitHub (nécessaire pour que
+  3. Génère un Reel vidéo Klarimo (4 diapos + musique de fond générée par
+     code, sans voix) plutôt qu'une simple image fixe : c'est nettement plus
+     visible dans les algorithmes Facebook/Instagram qu'un post statique.
+  4. Commit + push cette vidéo dans CE MÊME dépôt GitHub (nécessaire pour que
      l'API Instagram puisse aller la chercher via raw.githubusercontent.com).
-  5. Publie sur la Page Facebook et sur le compte Instagram professionnel.
+  5. Publie le Reel sur la Page Facebook et sur le compte Instagram
+     professionnel.
   6. Enregistre ce qui a été publié (commit + push) pour ne jamais répéter un
      sujet récent, même d'une exécution à l'autre.
 
@@ -39,7 +42,8 @@ from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from generate_visual import generate_visual  # noqa: E402
+from generate_klarimo_reel import generate_klarimo_reel  # noqa: E402
+from generate_image import generate_illustration  # noqa: E402
 
 HISTORY_PATH = os.path.join(HERE, "klarimo_history.json")
 LOG_PATH = os.path.join(HERE, "klarimo_autopost.log")
@@ -51,7 +55,12 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 FB_API_VERSION = "v21.0"
 
-TEXT_FIELDS = ["visual_title", "visual_subtitle", "caption_instagram", "caption_facebook"]
+TEXT_FIELDS = [
+    "visual_title", "visual_subtitle", "reel_point_1", "reel_point_2",
+    "caption_instagram", "caption_facebook",
+]
+# image_prompt n'est jamais montré au public (c'est un prompt technique en anglais pour
+# Gemini) : pas besoin de le passer au filet anti-tiret, seulement aux champs publiés.
 
 
 def sanitize_dashes(content):
@@ -94,6 +103,9 @@ def load_config():
     if missing:
         log(f"ERREUR : variables d'environnement manquantes : {missing}")
         sys.exit(1)
+    # Optionnelle : contrairement aux autres, l'absence de cette clé ne bloque jamais
+    # la publication, elle désactive juste la petite illustration du Reel (voir plus bas).
+    cfg["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "")
     return cfg
 
 
@@ -247,6 +259,26 @@ Tu dois aussi produire le texte du VISUEL (image de la publication) : un titre c
 8 mots maximum) et un sous-titre explicatif (16 mots maximum), qui donnent envie de lire la légende sans la
 répéter mot pour mot.
 
+FORMAT REEL (vidéo courte, 4 diapositives silencieuses avec musique de fond) : ce compte publie désormais en
+Reel plutôt qu'en simple image fixe, car c'est beaucoup plus visible dans les algorithmes Facebook/Instagram. Le
+Reel réutilise le titre (visual_title) comme accroche de la première diapo, puis enchaîne sur deux diapos
+supplémentaires qui creusent le sujet avant la diapo finale d'appel à l'action (déjà fixe, tu n'as rien à
+rédiger pour elle) :
+- reel_point_1 : explique LE MÉCANISME derrière le titre, la raison pour laquelle c'est vrai ou comment ça
+  fonctionne concrètement. Une seule phrase, 10 à 18 mots, aussi rigoureuse que le reste (mêmes règles sur les
+  chiffres instables, voir INTERDITS ABSOLUS).
+- reel_point_2 : apporte un chiffre concret, une conséquence pratique, ou un contraste (avec/sans, avant/après)
+  qui complète reel_point_1 sans le répéter. Une seule phrase, 10 à 18 mots, mêmes règles.
+Ces deux phrases doivent se lire vite (diapo affichée quelques secondes à l'écran), donc rester très simples,
+un seul fait par phrase, jamais deux idées imbriquées.
+
+Tu dois aussi produire image_prompt : une description en anglais, pour un générateur d'image IA, d'une petite
+illustration discrète liée au sujet du post (ex: une maison stylisée pour un post sur l'immobilier locatif, un
+document et une pièce pour un post sur la fiscalité, un arbre généalogique simplifié pour un post sur la
+transmission). Style demandé : icône éditoriale minimaliste, aplats de couleur simples, pas de photo réaliste,
+pas de personnage, pas de texte ni de chiffre dans l'image. Cette illustration reste petite et décorative sur le
+visuel final : elle ne doit jamais être complexe ou chargée.
+
 Réponds uniquement en appelant l'outil "post_content" fourni."""
 
 GENERATION_TOOL = {
@@ -266,6 +298,18 @@ GENERATION_TOOL = {
             },
             "visual_title": {"type": "string", "description": "Titre du visuel, 8 mots maximum."},
             "visual_subtitle": {"type": "string", "description": "Sous-titre du visuel, 16 mots maximum."},
+            "reel_point_1": {
+                "type": "string",
+                "description": "Diapo 2 du Reel : le mécanisme derrière le titre, 10 à 18 mots.",
+            },
+            "reel_point_2": {
+                "type": "string",
+                "description": "Diapo 3 du Reel : un chiffre ou une conséquence concrète, 10 à 18 mots.",
+            },
+            "image_prompt": {
+                "type": "string",
+                "description": "Description en anglais d'une petite illustration IA discrète liée au sujet.",
+            },
             "caption_instagram": {"type": "string"},
             "caption_facebook": {"type": "string"},
             "hashtags": {
@@ -278,7 +322,7 @@ GENERATION_TOOL = {
         },
         "required": [
             "angle_type", "sujet", "category_tag", "visual_title", "visual_subtitle",
-            "caption_instagram", "caption_facebook", "hashtags",
+            "reel_point_1", "reel_point_2", "image_prompt", "caption_instagram", "caption_facebook", "hashtags",
         ],
     },
 }
@@ -304,6 +348,9 @@ parmi ceux-ci :
 - Le texte contient un tiret cadratin/demi-cadratin ("—" ou "–"), ou sonne artificiel/trop léché pour un post
   écrit par un humain (phrases toutes construites sur le même modèle, transitions trop parfaites).
 - La liste de hashtags est vide, contient moins de 5 hashtags, ou n'a aucun rapport avec le sujet traité.
+- reel_point_1 ou reel_point_2 sont manquants, trop longs pour tenir sur une diapo (plus de 20 mots), disent la
+  même chose l'un que l'autre, ou contiennent un chiffre instable présenté comme certain (même règle que pour
+  les légendes).
 
 Les remarques de style, de longueur, de répétition entre les deux légendes, ou les préférences personnelles de
 formulation vont dans "issues" pour information, MAIS NE DOIVENT JAMAIS À ELLES SEULES FAIRE PASSER approved À
@@ -324,6 +371,8 @@ REVIEW_TOOL = {
             "corrected_caption_instagram": {"type": "string"},
             "corrected_caption_facebook": {"type": "string"},
             "corrected_hashtags": {"type": "array", "items": {"type": "string"}},
+            "corrected_reel_point_1": {"type": "string"},
+            "corrected_reel_point_2": {"type": "string"},
         },
         "required": ["approved", "issues"],
     },
@@ -370,6 +419,8 @@ def review_content(api_key, content):
         "Voici le contenu à relire avant publication :\n\n"
         f"Titre visuel : {content['visual_title']}\n"
         f"Sous-titre visuel : {content['visual_subtitle']}\n\n"
+        f"Diapo 2 du Reel (mécanisme) : {content.get('reel_point_1', '')}\n"
+        f"Diapo 3 du Reel (chiffre/conséquence) : {content.get('reel_point_2', '')}\n\n"
         f"Légende Instagram :\n{content['caption_instagram']}\n\n"
         f"Légende Facebook :\n{content['caption_facebook']}\n\n"
         f"Hashtags proposés : {hashtags_preview}"
@@ -433,98 +484,96 @@ def get_fresh_ig_token(config_token):
 
 
 # ---------------------------------------------------------------------------
-# Étape 2 : hébergement de l'image (commit direct dans le dépôt, via git)
+# Étape 2 : hébergement de la vidéo (commit direct dans le dépôt, via git)
 # ---------------------------------------------------------------------------
 
-def publish_image_and_get_url(repo, relative_path):
-    """Commit + push l'image (déjà écrite sur disque à HERE/relative_path), puis
+def publish_video_and_get_url(repo, relative_path):
+    """Commit + push la vidéo (déjà écrite sur disque à HERE/relative_path), puis
     renvoie son URL publique raw.githubusercontent.com. On attend un peu après
-    le push pour laisser le CDN de GitHub servir le fichier avant qu'Instagram
-    n'essaie de le télécharger."""
-    git_commit_and_push([relative_path], f"Nouveau visuel : {relative_path}")
+    le push pour laisser le CDN de GitHub servir le fichier avant que
+    Facebook/Instagram n'essaient de le télécharger."""
+    git_commit_and_push([relative_path], f"Nouveau Reel : {relative_path}")
     raw_url = f"https://raw.githubusercontent.com/{repo}/main/{relative_path}"
-    time.sleep(5)
+    time.sleep(6)
     return raw_url
 
 
 # ---------------------------------------------------------------------------
-# Étape 3 : publication Facebook + Instagram
+# Étape 3 : publication Facebook + Instagram (Reel vidéo)
 # ---------------------------------------------------------------------------
 
-def publish_facebook(page_id, page_token, image_path, caption):
-    url = f"https://graph.facebook.com/{FB_API_VERSION}/{page_id}/photos"
-    boundary = "----klarimoBoundary"
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
-
-    parts = []
-    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n")
-    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"access_token\"\r\n\r\n{page_token}\r\n")
-    parts.append(
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"source\"; filename=\"post.png\"\r\n"
-        f"Content-Type: image/png\r\n\r\n"
-    )
-    body = "".join(parts).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
-
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Erreur publication Facebook : {e.read().decode('utf-8', errors='ignore')}")
-
-
-def publish_instagram(ig_user_id, ig_token, image_url, caption):
-    # Ce compte utilise la connexion directe "Instagram business login" (pas une Page
-    # Facebook liée) : le jeton IGAA... n'est valide que sur l'hôte graph.instagram.com,
-    # PAS sur graph.facebook.com (qui renverrait "Invalid OAuth access token").
-    create_url = f"https://graph.instagram.com/{FB_API_VERSION}/{ig_user_id}/media"
-    status, resp = http_json(
-        create_url,
-        {"Content-Type": "application/json"},
-        {"image_url": image_url, "caption": caption, "access_token": ig_token},
-    )
-    if status != 200 or "id" not in resp:
-        raise RuntimeError(f"Erreur création média Instagram ({status}) : {resp}")
-    creation_id = resp["id"]
-
-    # Instagram télécharge et traite l'image en arrière-plan avant de pouvoir la publier.
-    # On attend que le statut passe à FINISHED avant d'appeler media_publish, sinon Meta
-    # renvoie "Media ID is not available" (le média n'est pas encore prêt).
+def _ig_wait_until_finished(creation_id, ig_token, label, max_attempts=20, sleep_seconds=3):
+    """Interroge Instagram jusqu'à ce que le conteneur (image ou vidéo) soit marqué
+    FINISHED. Le traitement d'une vidéo est nettement plus lourd que celui d'une image
+    et peut occasionnellement prendre plusieurs minutes (transcodage pour le flux
+    Reels) : c'est pour ça qu'on lui passe un délai bien plus long qu'à une image
+    (leçon apprise sur le compte On Est Tous d'Accord, dont le premier Reel avait
+    timeout avec seulement 1 minute d'attente)."""
     status_url = (
         f"https://graph.instagram.com/{FB_API_VERSION}/{creation_id}"
         f"?fields=status_code&access_token={urllib.parse.quote(ig_token)}"
     )
-    for attempt in range(15):
-        time.sleep(2)
+    for attempt in range(max_attempts):
+        time.sleep(sleep_seconds)
         req = urllib.request.Request(status_url, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp_raw:
                 status_data = json.loads(resp_raw.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise RuntimeError(
-                f"Erreur vérification statut média Instagram : {e.read().decode('utf-8', errors='ignore')}"
-            )
+            raise RuntimeError(f"Erreur vérification statut ({label}) : {e.read().decode('utf-8', errors='ignore')}")
         code = status_data.get("status_code")
-        log(f"Statut du média Instagram ({attempt + 1}/15) : {code}")
+        log(f"Statut {label} ({attempt + 1}/{max_attempts}) : {code}")
         if code == "FINISHED":
-            break
+            return
         if code in ("ERROR", "EXPIRED"):
-            raise RuntimeError(f"Le traitement du média Instagram a échoué : {status_data}")
-    else:
-        raise RuntimeError("Le média Instagram n'était toujours pas prêt après 30 secondes d'attente.")
+            raise RuntimeError(f"Le traitement de {label} a échoué : {status_data}")
+    raise RuntimeError(f"{label} n'était toujours pas prêt après l'attente maximale.")
 
-    publish_url = f"https://graph.instagram.com/{FB_API_VERSION}/{ig_user_id}/media_publish"
+
+def publish_facebook_video(page_id, page_token, video_url, description):
+    """Publie une vidéo sur la Page via une URL déjà hébergée. Les vidéos
+    verticales courtes sont généralement traitées comme des Reels par
+    Facebook automatiquement."""
+    url = f"https://graph.facebook.com/{FB_API_VERSION}/{page_id}/videos"
+    payload = {
+        "file_url": video_url,
+        "description": description,
+        "access_token": page_token,
+        "published": "true",
+    }
+    data = urllib.parse.urlencode(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Erreur publication vidéo Facebook : {e.read().decode('utf-8', errors='ignore')}")
+
+
+def publish_instagram_reel(ig_user_id, ig_token, video_url, caption):
+    # Ce compte utilise la connexion directe "Instagram business login" (pas une Page
+    # Facebook liée) : le jeton IGAA... n'est valide que sur l'hôte graph.instagram.com,
+    # PAS sur graph.facebook.com (qui renverrait "Invalid OAuth access token").
     status, resp = http_json(
-        publish_url,
+        f"https://graph.instagram.com/{FB_API_VERSION}/{ig_user_id}/media",
+        {"Content-Type": "application/json"},
+        {"media_type": "REELS", "video_url": video_url, "caption": caption, "access_token": ig_token},
+    )
+    if status != 200 or "id" not in resp:
+        raise RuntimeError(f"Erreur création conteneur Reel Instagram ({status}) : {resp}")
+    creation_id = resp["id"]
+
+    # Une vidéo met beaucoup plus longtemps à être traitée qu'une image : jusqu'à 10
+    # minutes d'attente (60 tentatives de 10 secondes) avant d'abandonner.
+    _ig_wait_until_finished(creation_id, ig_token, "Reel Instagram", max_attempts=60, sleep_seconds=10)
+
+    status, resp = http_json(
+        f"https://graph.instagram.com/{FB_API_VERSION}/{ig_user_id}/media_publish",
         {"Content-Type": "application/json"},
         {"creation_id": creation_id, "access_token": ig_token},
     )
     if status != 200:
-        raise RuntimeError(f"Erreur publication Instagram ({status}) : {resp}")
+        raise RuntimeError(f"Erreur publication Reel Instagram ({status}) : {resp}")
     return resp
 
 
@@ -566,6 +615,8 @@ def main():
             review.get("corrected_caption_instagram")
             or review.get("corrected_caption_facebook")
             or review.get("corrected_hashtags")
+            or review.get("corrected_reel_point_1")
+            or review.get("corrected_reel_point_2")
         )
         if review.get("corrected_caption_instagram"):
             content["caption_instagram"] = review["corrected_caption_instagram"]
@@ -573,6 +624,10 @@ def main():
             content["caption_facebook"] = review["corrected_caption_facebook"]
         if review.get("corrected_hashtags"):
             content["hashtags"] = review["corrected_hashtags"]
+        if review.get("corrected_reel_point_1"):
+            content["reel_point_1"] = review["corrected_reel_point_1"]
+        if review.get("corrected_reel_point_2"):
+            content["reel_point_2"] = review["corrected_reel_point_2"]
 
         if attempt == max_attempts - 1:
             break
@@ -587,17 +642,45 @@ def main():
         log("Contenu toujours rejeté après plusieurs tentatives -> ABANDON de ce cycle, rien n'est publié.")
         return
 
-    # --- Étape 2 : visuel ---
-    relative_image_path = f"posts/{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.png"
-    image_path = os.path.join(HERE, relative_image_path)
-    os.makedirs(os.path.dirname(image_path), exist_ok=True)
-    log("Génération du visuel...")
-    generate_visual(content["visual_title"], content["visual_subtitle"], content["category_tag"], image_path)
+    # --- Étape 2 : petite illustration IA (Gemini) ---
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    relative_dir = f"posts/{stamp}"
+    out_dir = os.path.join(HERE, relative_dir)
+    os.makedirs(out_dir, exist_ok=True)
 
-    # --- Étape 3 : hébergement de l'image (commit + push dans ce même dépôt) ---
-    log("Publication de l'image dans le dépôt GitHub...")
-    image_url = publish_image_and_get_url(cfg["GITHUB_REPO"], relative_image_path)
-    log(f"Image publique : {image_url}")
+    illustration_path = None
+    if cfg.get("GEMINI_API_KEY"):
+        try:
+            log("Génération de la petite illustration (API Gemini)...")
+            illustration_path = generate_illustration(
+                cfg["GEMINI_API_KEY"], content["image_prompt"],
+                os.path.join(out_dir, "illustration.png"),
+                style_suffix=(
+                    "Square format, flat minimalist editorial icon illustration, "
+                    "simple color blocks, no photo realism, no character."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Jamais bloquant : sans illustration, le Reel se génère quand même,
+            # juste sans la petite image décorative sur les diapositives.
+            log(f"AVERTISSEMENT : génération de l'illustration impossible ({exc}). Reel sans illustration.")
+    else:
+        log("GEMINI_API_KEY non configurée : Reel généré sans illustration (voir instructions pour l'ajouter).")
+
+    # --- Étape 3 : Reel vidéo ---
+    log("Génération du Reel (4 diapositives + musique de fond générée par code)...")
+    video_path = generate_klarimo_reel(
+        content["category_tag"], content["visual_title"],
+        content["reel_point_1"], content["reel_point_2"],
+        out_dir=out_dir, seed=abs(hash(content["sujet"])) % 1000,
+        illustration_path=illustration_path,
+    )
+
+    # --- Étape 4 : hébergement de la vidéo (commit + push dans ce même dépôt) ---
+    log("Publication du Reel dans le dépôt GitHub...")
+    relative_video_path = os.path.relpath(video_path, HERE)
+    video_url = publish_video_and_get_url(cfg["GITHUB_REPO"], relative_video_path)
+    log(f"Vidéo publique : {video_url}")
 
     # Filet de sécurité : quoi qu'il arrive (modèle qui oublie le champ, ancienne
     # version du contenu, etc.), un post Klarimo ne part JAMAIS sans hashtags,
@@ -615,26 +698,26 @@ def main():
 
     hashtags_str = " ".join(f"#{h.lstrip('#')}" for h in content["hashtags"])
 
-    # --- Étape 4 : publication Facebook ---
-    log("Publication sur Facebook...")
+    # --- Étape 5 : publication Facebook ---
+    log("Publication du Reel sur Facebook...")
     fb_caption = content["caption_facebook"] + "\n\n" + hashtags_str
-    fb_result = publish_facebook(cfg["FB_PAGE_ID"], cfg["FB_PAGE_ACCESS_TOKEN"], image_path, fb_caption)
+    fb_result = publish_facebook_video(cfg["FB_PAGE_ID"], cfg["FB_PAGE_ACCESS_TOKEN"], video_url, fb_caption)
     log(f"Facebook OK : {fb_result}")
 
-    # --- Étape 5 : publication Instagram ---
-    log("Publication sur Instagram...")
+    # --- Étape 6 : publication Instagram ---
+    log("Publication du Reel sur Instagram...")
     ig_caption = content["caption_instagram"] + "\n\n" + hashtags_str
-    ig_result = publish_instagram(cfg["IG_USER_ID"], ig_token, image_url, ig_caption)
+    ig_result = publish_instagram_reel(cfg["IG_USER_ID"], ig_token, video_url, ig_caption)
     log(f"Instagram OK : {ig_result}")
 
-    # --- Étape 6 : historique ---
+    # --- Étape 7 : historique ---
     history.append({
         "date": datetime.now().isoformat(timespec="seconds"),
         "sujet": content["sujet"],
         "angle_type": content["angle_type"],
         "category_tag": content["category_tag"],
-        "facebook_post_id": fb_result.get("post_id") or fb_result.get("id"),
-        "instagram_media_id": ig_result.get("id"),
+        "facebook_reel_video_id": fb_result.get("id"),
+        "instagram_reel_media_id": ig_result.get("id"),
     })
     save_history(history)
     git_commit_and_push([os.path.basename(HISTORY_PATH)], f"Historique : {content['sujet'][:60]}")
