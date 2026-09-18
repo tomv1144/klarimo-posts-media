@@ -2,11 +2,13 @@ name: Klarimo Autopost
 
 on:
   schedule:
+    # 10:30 UTC = 12:30 à Paris en été (CEST) / 11:30 à Paris en hiver (CET).
+    # Décalage d'1h en hiver, sans conséquence pour ce type de publication.
     - cron: "30 10 * * 1-5"
-  workflow_dispatch: {}
+  workflow_dispatch: {}   # permet de lancer le workflow manuellement depuis GitHub pour tester
 
 permissions:
-  contents: write
+  contents: write   # nécessaire pour que le script puisse commit + push l'image et l'historique
 
 jobs:
   autopost:
@@ -20,8 +22,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Installer les dépendances
-        run: pip install Pillow
+      - name: Installer ffmpeg (assemblage du Reel)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Installer les dépendances Python
+        run: pip install Pillow numpy scipy
 
       - name: Lancer l'agent de publication
         env:
@@ -30,5 +35,6 @@ jobs:
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_REPO: ${{ github.repository }}
         run: python klarimo_autopost.py
