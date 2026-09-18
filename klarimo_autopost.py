@@ -43,7 +43,7 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from generate_klarimo_reel import generate_klarimo_reel  # noqa: E402
-from generate_image import generate_illustration  # noqa: E402
+from generate_local_icon import draw_icon, ICON_TYPES  # noqa: E402
 
 HISTORY_PATH = os.path.join(HERE, "klarimo_history.json")
 LOG_PATH = os.path.join(HERE, "klarimo_autopost.log")
@@ -59,8 +59,6 @@ TEXT_FIELDS = [
     "visual_title", "visual_subtitle", "reel_point_1", "reel_point_2",
     "caption_instagram", "caption_facebook",
 ]
-# image_prompt n'est jamais montré au public (c'est un prompt technique en anglais pour
-# Gemini) : pas besoin de le passer au filet anti-tiret, seulement aux champs publiés.
 
 
 def sanitize_dashes(content):
@@ -103,9 +101,6 @@ def load_config():
     if missing:
         log(f"ERREUR : variables d'environnement manquantes : {missing}")
         sys.exit(1)
-    # Optionnelle : contrairement aux autres, l'absence de cette clé ne bloque jamais
-    # la publication, elle désactive juste la petite illustration du Reel (voir plus bas).
-    cfg["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "")
     return cfg
 
 
@@ -272,12 +267,17 @@ rédiger pour elle) :
 Ces deux phrases doivent se lire vite (diapo affichée quelques secondes à l'écran), donc rester très simples,
 un seul fait par phrase, jamais deux idées imbriquées.
 
-Tu dois aussi produire image_prompt : une description en anglais, pour un générateur d'image IA, d'une petite
-illustration discrète liée au sujet du post (ex: une maison stylisée pour un post sur l'immobilier locatif, un
-document et une pièce pour un post sur la fiscalité, un arbre généalogique simplifié pour un post sur la
-transmission). Style demandé : icône éditoriale minimaliste, aplats de couleur simples, pas de photo réaliste,
-pas de personnage, pas de texte ni de chiffre dans l'image. Cette illustration reste petite et décorative sur le
-visuel final : elle ne doit jamais être complexe ou chargée.
+Tu dois aussi choisir icon_type : la petite icône (dessinée localement, pas générée par IA) qui accompagne le
+Reel, parmi cette liste fixe, celle qui correspond le mieux au sujet du post :
+- "maison" : immobilier locatif en général, gestion locative.
+- "document" : fiscalité, impôts, déclarations, taux.
+- "parts_sci" : SCI, répartition de parts, indivision.
+- "transmission" : succession, donation, transmission familiale.
+- "graphique" : plus-value, rendement, évolution d'un investissement.
+- "bouclier" : protection du patrimoine, gestion des risques, assurance.
+- "horloge" : durée de détention, délais, échéances.
+- "cle" : clé de lecture, méthode, accès à l'information.
+Choisis toujours UNE SEULE valeur dans cette liste exacte, celle qui correspond le mieux au sujet du jour.
 
 Réponds uniquement en appelant l'outil "post_content" fourni."""
 
@@ -306,9 +306,10 @@ GENERATION_TOOL = {
                 "type": "string",
                 "description": "Diapo 3 du Reel : un chiffre ou une conséquence concrète, 10 à 18 mots.",
             },
-            "image_prompt": {
+            "icon_type": {
                 "type": "string",
-                "description": "Description en anglais d'une petite illustration IA discrète liée au sujet.",
+                "enum": ICON_TYPES,
+                "description": "Icône dessinée localement la plus adaptée au sujet du post.",
             },
             "caption_instagram": {"type": "string"},
             "caption_facebook": {"type": "string"},
@@ -322,7 +323,7 @@ GENERATION_TOOL = {
         },
         "required": [
             "angle_type", "sujet", "category_tag", "visual_title", "visual_subtitle",
-            "reel_point_1", "reel_point_2", "image_prompt", "caption_instagram", "caption_facebook", "hashtags",
+            "reel_point_1", "reel_point_2", "icon_type", "caption_instagram", "caption_facebook", "hashtags",
         ],
     },
 }
@@ -642,30 +643,21 @@ def main():
         log("Contenu toujours rejeté après plusieurs tentatives -> ABANDON de ce cycle, rien n'est publié.")
         return
 
-    # --- Étape 2 : petite illustration IA (Gemini) ---
+    # --- Étape 2 : petite illustration (dessinée localement, gratuite et fiable) ---
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     relative_dir = f"posts/{stamp}"
     out_dir = os.path.join(HERE, relative_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     illustration_path = None
-    if cfg.get("GEMINI_API_KEY"):
-        try:
-            log("Génération de la petite illustration (API Gemini)...")
-            illustration_path = generate_illustration(
-                cfg["GEMINI_API_KEY"], content["image_prompt"],
-                os.path.join(out_dir, "illustration.png"),
-                style_suffix=(
-                    "Square format, flat minimalist editorial icon illustration, "
-                    "simple color blocks, no photo realism, no character."
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Jamais bloquant : sans illustration, le Reel se génère quand même,
-            # juste sans la petite image décorative sur les diapositives.
-            log(f"AVERTISSEMENT : génération de l'illustration impossible ({exc}). Reel sans illustration.")
-    else:
-        log("GEMINI_API_KEY non configurée : Reel généré sans illustration (voir instructions pour l'ajouter).")
+    try:
+        icon_type = content.get("icon_type", "maison")
+        log(f"Génération de la petite illustration (icône : {icon_type})...")
+        illustration_path = draw_icon(icon_type, os.path.join(out_dir, "illustration.png"))
+    except Exception as exc:  # noqa: BLE001
+        # Jamais bloquant : sans illustration, le Reel se génère quand même,
+        # juste sans la petite image décorative sur les diapositives.
+        log(f"AVERTISSEMENT : génération de l'illustration impossible ({exc}). Reel sans illustration.")
 
     # --- Étape 3 : Reel vidéo ---
     log("Génération du Reel (4 diapositives + musique de fond générée par code)...")
