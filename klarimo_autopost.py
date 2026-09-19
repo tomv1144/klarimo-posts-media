@@ -10,9 +10,11 @@ Ce script fait tout, sans intervention humaine, à chaque exécution :
      l'action) — s'il rejette le contenu, le script régénère une fois, puis
      abandonne la publication de ce cycle plutôt que de publier un contenu
      faible (c'est le filtre qualité qui remplace la relecture humaine).
-  3. Génère un Reel vidéo Klarimo (4 diapos + musique de fond générée par
-     code, sans voix) plutôt qu'une simple image fixe : c'est nettement plus
-     visible dans les algorithmes Facebook/Instagram qu'un post statique.
+  3. Génère un Reel vidéo Klarimo (habillage de marque + reveal progressif du
+     texte, rendu tenté via l'API OpenAI puis, en secours, par un moteur local ;
+     musique de fond générée par code, sans voix) plutôt qu'une simple image
+     fixe : c'est nettement plus visible dans les algorithmes Facebook/Instagram
+     qu'un post statique.
   4. Commit + push cette vidéo dans CE MÊME dépôt GitHub (nécessaire pour que
      l'API Instagram puisse aller la chercher via raw.githubusercontent.com).
   5. Publie le Reel sur la Page Facebook et sur le compte Instagram
@@ -43,7 +45,6 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from generate_klarimo_reel import generate_klarimo_reel  # noqa: E402
-from generate_local_icon import draw_icon, ICON_TYPES  # noqa: E402
 
 HISTORY_PATH = os.path.join(HERE, "klarimo_history.json")
 LOG_PATH = os.path.join(HERE, "klarimo_autopost.log")
@@ -56,7 +57,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 FB_API_VERSION = "v21.0"
 
 TEXT_FIELDS = [
-    "visual_title", "visual_subtitle", "reel_point_1", "reel_point_2",
+    "visual_title", "reel_point_1", "reel_point_2", "reel_share_line",
     "caption_instagram", "caption_facebook",
 ]
 
@@ -236,11 +237,22 @@ ANGLES AUTORISÉS (choisis-en un, adapté au sujet) :
 3. Le coût caché : la conséquence invisible d'une habitude banale en gestion locative/patrimoniale.
 4. L'avant/après : une transformation concrète avec la méthode (générique, jamais un cas client inventé).
 
+OBJECTIF PARTAGE (très important) : le signal le plus fort aujourd'hui pour qu'un Reel soit recommandé à plus
+de monde par Facebook/Instagram, ce n'est plus juste le temps de visionnage, c'est le nombre de fois où il est
+ENVOYÉ EN MESSAGE PRIVÉ à quelqu'un (déclaration publique d'Adam Mosseri, responsable Instagram). Concrètement :
+en écrivant le post, pense TOUJOURS à une personne précise et concrète à qui le lecteur voudrait transférer ce
+contenu (son associé de SCI, son frère ou sa soeur pour une succession, son conjoint pour une décision
+immobilière commune). Ça doit rester une invitation naturelle et spécifique au sujet du jour, JAMAIS une formule
+artificielle et générique du type "tague un ami" ou "partage à 3 personnes" (ce genre de procédé est pénalisé
+par la plateforme).
+
 FORMAT INSTAGRAM/FACEBOOK :
 - Légende qui complète le visuel, ne le décrit pas.
 - Première phrase = accroche forte qui nomme la douleur (fait ou question), visible avant "plus".
 - Paragraphes très courts (1-3 lignes), lecture mobile.
-- Un seul appel à l'action, clair : inviter à envoyer un message privé (jamais de lien).
+- Deux appels à l'action, dans cet ordre : d'abord l'invitation à transférer le post à la personne concernée
+  (voir OBJECTIF PARTAGE ci-dessus), puis l'invitation à envoyer un message privé pour son propre cas (jamais de
+  lien).
 - Longueur : 60 à 130 mots.
 - OBLIGATOIRE : le champ hashtags ne doit JAMAIS être vide. Toujours entre 6 et 10 hashtags pertinents et
   spécifiques (immobilier, fiscalité, patrimoine, SCI, investissement locatif, transmission...), en français,
@@ -250,34 +262,31 @@ FORMAT INSTAGRAM/FACEBOOK :
 - Les légendes Instagram et Facebook doivent être DIFFÉRENTES l'une de l'autre (angle d'attaque ou formulation
   distincte), pas de simple copier-coller entre les deux.
 
-Tu dois aussi produire le texte du VISUEL (image de la publication) : un titre court et percutant (accroche,
-8 mots maximum) et un sous-titre explicatif (16 mots maximum), qui donnent envie de lire la légende sans la
-répéter mot pour mot.
-
-FORMAT REEL (vidéo courte, 4 diapositives silencieuses avec musique de fond) : ce compte publie désormais en
-Reel plutôt qu'en simple image fixe, car c'est beaucoup plus visible dans les algorithmes Facebook/Instagram. Le
-Reel réutilise le titre (visual_title) comme accroche de la première diapo, puis enchaîne sur deux diapos
-supplémentaires qui creusent le sujet avant la diapo finale d'appel à l'action (déjà fixe, tu n'as rien à
-rédiger pour elle) :
-- reel_point_1 : explique LE MÉCANISME derrière le titre, la raison pour laquelle c'est vrai ou comment ça
-  fonctionne concrètement. Une seule phrase, 10 à 18 mots, aussi rigoureuse que le reste (mêmes règles sur les
-  chiffres instables, voir INTERDITS ABSOLUS).
-- reel_point_2 : apporte un chiffre concret, une conséquence pratique, ou un contraste (avec/sans, avant/après)
-  qui complète reel_point_1 sans le répéter. Une seule phrase, 10 à 18 mots, mêmes règles.
+FORMAT REEL (vidéo courte, 4 scènes silencieuses avec musique de fond) : ce compte publie désormais en
+Reel plutôt qu'en simple image fixe, car c'est beaucoup plus visible dans les algorithmes Facebook/Instagram.
+Pour que les gens regardent jusqu'au bout (et pas seulement la première diapo), le Reel doit fonctionner comme
+une BOUCLE OUVERTE : la diapo 1 lance une affirmation ou une question qui donne clairement l'impression qu'il
+manque un morceau de l'histoire, et la diapo 3 apporte le dénouement qui la referme. Sans cette tension, les
+gens n'ont aucune raison de rester jusqu'à la fin.
+- visual_title (diapo 1, l'accroche) : formule-le pour qu'il crée cette boucle ouverte. Ne donne jamais toute
+  l'information dans le titre lui-même : nomme le problème ou le chiffre choc, mais garde l'explication ou la
+  nuance pour la suite. Exemple de boucle ouverte : "Ta plus-value peut être taxée à plus de 37 %." (donne envie
+  de savoir pourquoi et s'il y a moyen d'y échapper) plutôt qu'une phrase qui expliquerait déjà tout.
+- reel_point_1 (diapo 2, "LE MÉCANISME") : explique la raison pour laquelle l'accroche est vraie ou comment ça
+  fonctionne concrètement, sans encore donner la résolution complète. Une seule phrase, 10 à 18 mots, aussi
+  rigoureuse que le reste (mêmes règles sur les chiffres instables, voir INTERDITS ABSOLUS).
+- reel_point_2 (diapo 3, "LA RÉPONSE") : c'est le DÉNOUEMENT qui referme la boucle ouverte de la diapo 1 : le
+  chiffre, l'exception, ou la conséquence concrète que la personne attendait depuis le début. Cette diapo doit
+  donner l'impression d'une vraie réponse, pas juste un détail de plus. Une seule phrase, 10 à 18 mots, mêmes
+  règles.
 Ces deux phrases doivent se lire vite (diapo affichée quelques secondes à l'écran), donc rester très simples,
 un seul fait par phrase, jamais deux idées imbriquées.
 
-Tu dois aussi choisir icon_type : la petite icône (dessinée localement, pas générée par IA) qui accompagne le
-Reel, parmi cette liste fixe, celle qui correspond le mieux au sujet du post :
-- "maison" : immobilier locatif en général, gestion locative.
-- "document" : fiscalité, impôts, déclarations, taux.
-- "parts_sci" : SCI, répartition de parts, indivision.
-- "transmission" : succession, donation, transmission familiale.
-- "graphique" : plus-value, rendement, évolution d'un investissement.
-- "bouclier" : protection du patrimoine, gestion des risques, assurance.
-- "horloge" : durée de détention, délais, échéances.
-- "cle" : clé de lecture, méthode, accès à l'information.
-Choisis toujours UNE SEULE valeur dans cette liste exacte, celle qui correspond le mieux au sujet du jour.
+Tu dois aussi produire reel_share_line : une courte phrase (6 à 12 mots) affichée sur la toute dernière diapo,
+qui invite à transférer CE Reel précis à une personne concrète concernée par CE sujet précis (même logique que
+OBJECTIF PARTAGE plus haut, mais formulée pour être lue en une seconde à l'écran, pas comme une phrase de
+légende). Exemple pour un post sur les parts de SCI : "Un associé de SCI dans tes contacts ? Envoie-lui ça."
+Jamais générique, toujours ancrée dans le sujet du jour.
 
 Réponds uniquement en appelant l'outil "post_content" fourni."""
 
@@ -296,20 +305,18 @@ GENERATION_TOOL = {
                 "type": "string",
                 "description": "Étiquette courte affichée sur le visuel, ex: FISCALITÉ IMMOBILIÈRE, SCI, TRANSMISSION.",
             },
-            "visual_title": {"type": "string", "description": "Titre du visuel, 8 mots maximum."},
-            "visual_subtitle": {"type": "string", "description": "Sous-titre du visuel, 16 mots maximum."},
+            "visual_title": {"type": "string", "description": "Titre du visuel (diapo 1, l'accroche), 8 mots maximum."},
             "reel_point_1": {
                 "type": "string",
                 "description": "Diapo 2 du Reel : le mécanisme derrière le titre, 10 à 18 mots.",
             },
             "reel_point_2": {
                 "type": "string",
-                "description": "Diapo 3 du Reel : un chiffre ou une conséquence concrète, 10 à 18 mots.",
+                "description": "Diapo 3 du Reel (LA RÉPONSE) : le dénouement qui referme la boucle ouverte du titre, 10 à 18 mots.",
             },
-            "icon_type": {
+            "reel_share_line": {
                 "type": "string",
-                "enum": ICON_TYPES,
-                "description": "Icône dessinée localement la plus adaptée au sujet du post.",
+                "description": "Diapo 4 du Reel : courte invitation (6 à 12 mots) à transférer ce Reel précis à une personne concernée par ce sujet précis.",
             },
             "caption_instagram": {"type": "string"},
             "caption_facebook": {"type": "string"},
@@ -322,8 +329,9 @@ GENERATION_TOOL = {
             },
         },
         "required": [
-            "angle_type", "sujet", "category_tag", "visual_title", "visual_subtitle",
-            "reel_point_1", "reel_point_2", "icon_type", "caption_instagram", "caption_facebook", "hashtags",
+            "angle_type", "sujet", "category_tag", "visual_title",
+            "reel_point_1", "reel_point_2", "reel_share_line",
+            "caption_instagram", "caption_facebook", "hashtags",
         ],
     },
 }
@@ -352,6 +360,9 @@ parmi ceux-ci :
 - reel_point_1 ou reel_point_2 sont manquants, trop longs pour tenir sur une diapo (plus de 20 mots), disent la
   même chose l'un que l'autre, ou contiennent un chiffre instable présenté comme certain (même règle que pour
   les légendes).
+- reel_point_2 ne referme pas vraiment ce que reel_point_1/le titre laissaient en suspens (pas de vrai
+  dénouement), ou reel_share_line est une formule générique de type "tague un ami"/"partage à 3 personnes" au
+  lieu d'être ancrée dans le sujet précis du jour.
 
 Les remarques de style, de longueur, de répétition entre les deux légendes, ou les préférences personnelles de
 formulation vont dans "issues" pour information, MAIS NE DOIVENT JAMAIS À ELLES SEULES FAIRE PASSER approved À
@@ -374,6 +385,7 @@ REVIEW_TOOL = {
             "corrected_hashtags": {"type": "array", "items": {"type": "string"}},
             "corrected_reel_point_1": {"type": "string"},
             "corrected_reel_point_2": {"type": "string"},
+            "corrected_reel_share_line": {"type": "string"},
         },
         "required": ["approved", "issues"],
     },
@@ -418,10 +430,10 @@ def review_content(api_key, content):
     hashtags_preview = ", ".join(content.get("hashtags") or []) or "(AUCUN, champ vide)"
     user_message = (
         "Voici le contenu à relire avant publication :\n\n"
-        f"Titre visuel : {content['visual_title']}\n"
-        f"Sous-titre visuel : {content['visual_subtitle']}\n\n"
+        f"Titre visuel (diapo 1, l'accroche) : {content['visual_title']}\n\n"
         f"Diapo 2 du Reel (mécanisme) : {content.get('reel_point_1', '')}\n"
-        f"Diapo 3 du Reel (chiffre/conséquence) : {content.get('reel_point_2', '')}\n\n"
+        f"Diapo 3 du Reel (la réponse, dénouement de la boucle ouverte du titre) : {content.get('reel_point_2', '')}\n"
+        f"Diapo 4 du Reel (invitation à transférer) : {content.get('reel_share_line', '')}\n\n"
         f"Légende Instagram :\n{content['caption_instagram']}\n\n"
         f"Légende Facebook :\n{content['caption_facebook']}\n\n"
         f"Hashtags proposés : {hashtags_preview}"
@@ -618,6 +630,7 @@ def main():
             or review.get("corrected_hashtags")
             or review.get("corrected_reel_point_1")
             or review.get("corrected_reel_point_2")
+            or review.get("corrected_reel_share_line")
         )
         if review.get("corrected_caption_instagram"):
             content["caption_instagram"] = review["corrected_caption_instagram"]
@@ -629,6 +642,8 @@ def main():
             content["reel_point_1"] = review["corrected_reel_point_1"]
         if review.get("corrected_reel_point_2"):
             content["reel_point_2"] = review["corrected_reel_point_2"]
+        if review.get("corrected_reel_share_line"):
+            content["reel_share_line"] = review["corrected_reel_share_line"]
 
         if attempt == max_attempts - 1:
             break
@@ -643,32 +658,21 @@ def main():
         log("Contenu toujours rejeté après plusieurs tentatives -> ABANDON de ce cycle, rien n'est publié.")
         return
 
-    # --- Étape 2 : petite illustration (dessinée localement, gratuite et fiable) ---
+    # --- Étape 2 : Reel vidéo (rendu tenté via l'API OpenAI, sinon moteur local) ---
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     relative_dir = f"posts/{stamp}"
     out_dir = os.path.join(HERE, relative_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    illustration_path = None
-    try:
-        icon_type = content.get("icon_type", "maison")
-        log(f"Génération de la petite illustration (icône : {icon_type})...")
-        illustration_path = draw_icon(icon_type, os.path.join(out_dir, "illustration.png"))
-    except Exception as exc:  # noqa: BLE001
-        # Jamais bloquant : sans illustration, le Reel se génère quand même,
-        # juste sans la petite image décorative sur les diapositives.
-        log(f"AVERTISSEMENT : génération de l'illustration impossible ({exc}). Reel sans illustration.")
-
-    # --- Étape 3 : Reel vidéo ---
-    log("Génération du Reel (4 diapositives + musique de fond générée par code)...")
+    log("Génération du Reel (rendu OpenAI, avec repli automatique sur le moteur local)...")
     video_path = generate_klarimo_reel(
         content["category_tag"], content["visual_title"],
         content["reel_point_1"], content["reel_point_2"],
+        content.get("reel_share_line"),
         out_dir=out_dir, seed=abs(hash(content["sujet"])) % 1000,
-        illustration_path=illustration_path,
     )
 
-    # --- Étape 4 : hébergement de la vidéo (commit + push dans ce même dépôt) ---
+    # --- Étape 3 : hébergement de la vidéo (commit + push dans ce même dépôt) ---
     log("Publication du Reel dans le dépôt GitHub...")
     relative_video_path = os.path.relpath(video_path, HERE)
     video_url = publish_video_and_get_url(cfg["GITHUB_REPO"], relative_video_path)
@@ -690,19 +694,19 @@ def main():
 
     hashtags_str = " ".join(f"#{h.lstrip('#')}" for h in content["hashtags"])
 
-    # --- Étape 5 : publication Facebook ---
+    # --- Étape 4 : publication Facebook ---
     log("Publication du Reel sur Facebook...")
     fb_caption = content["caption_facebook"] + "\n\n" + hashtags_str
     fb_result = publish_facebook_video(cfg["FB_PAGE_ID"], cfg["FB_PAGE_ACCESS_TOKEN"], video_url, fb_caption)
     log(f"Facebook OK : {fb_result}")
 
-    # --- Étape 6 : publication Instagram ---
+    # --- Étape 5 : publication Instagram ---
     log("Publication du Reel sur Instagram...")
     ig_caption = content["caption_instagram"] + "\n\n" + hashtags_str
     ig_result = publish_instagram_reel(cfg["IG_USER_ID"], ig_token, video_url, ig_caption)
     log(f"Instagram OK : {ig_result}")
 
-    # --- Étape 7 : historique ---
+    # --- Étape 6 : historique ---
     history.append({
         "date": datetime.now().isoformat(timespec="seconds"),
         "sujet": content["sujet"],
