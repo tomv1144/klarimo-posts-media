@@ -1,32 +1,37 @@
 """
-Klarimo - Moteur de rendu "reveal progressif" pour le Reel (sans IA, sans illustration)
+Klarimo - Moteur de rendu "reveal progressif" pour le Reel
 ==========================================================================================
-Remplace l'ancien systeme (4 diapositives statiques + zoom decoratif + illustration IA
-en fond) par un principe different, inspire d'une demonstration produite avec ChatGPT
-("Le calcul incomplet") : un habillage de marque qui reste PERSISTANT a l'ecran (bandeau
-KLARIMO + categorie en haut, barre de progression, pied de page), et un contenu qui se
-REVELE progressivement scene par scene (le titre apparait ligne par ligne, puis "LE
-MECANISME", puis "LA REPONSE", puis l'invitation a transferer) plutot qu'un simple zoom
-decoratif sur une image fixe. Le mouvement porte enfin du sens (une information de plus
-apparait a chaque etape) au lieu d'etre juste cosmetique.
+Habillage de marque qui reste PERSISTANT a l'ecran (bandeau KLARIMO + categorie en
+haut, barre de progression, pied de page), et un contenu qui se REVELE progressivement
+scene par scene (le titre apparait ligne par ligne, puis "LE MECANISME", puis "LA
+REPONSE", puis l'invitation a transferer), inspire d'une demonstration produite avec
+ChatGPT ("Le calcul incomplet"). Le mouvement porte enfin du sens (une information de
+plus apparait a chaque etape) au lieu d'etre juste cosmetique.
 
-Zero dependance a une image generee par IA : uniquement du texte et des formes simples,
-dans les couleurs et polices Klarimo. Ce fichier est volontairement autonome (aucun
-import du reste du projet Klarimo autre que ses polices/logo) : il sert a la fois de
-moteur de secours local (voir generate_klarimo_reel.py) ET de modele de reference envoye
-a l'API OpenAI (voir generate_video_openai.py), pour que le rendu produit par OpenAI et
-le rendu de secours se ressemblent toujours.
+Accepte optionnellement une illustration de fond par scene principale (voir
+background_paths dans render_reel_video / build_keyframes), generee ailleurs par
+generate_scene_illustrations.py (API OpenAI) : l'image est melangee au degrade navy de
+marque et assombrie sur les bords (vignette) pour que le texte blanc/dore reste
+lisible par-dessus. Sans illustration fournie (parametre absent, ou generation
+IA indisponible ce cycle-la), le rendu retombe automatiquement sur le degrade navy uni.
+
+Ce fichier est volontairement autonome (aucun import du reste du projet Klarimo autre
+que ses polices/logo) : il sert a la fois de moteur de secours local (voir
+generate_klarimo_reel.py) ET de modele de reference envoye a l'API OpenAI (voir
+generate_video_openai.py), pour que le rendu produit par OpenAI et le rendu de secours
+se ressemblent toujours, avec ou sans illustrations.
 
 Utilisation en import :
     from klarimo_motion import render_reel_video
-    video_path = render_reel_video(category_tag, title, point_1, point_2, share_line, out_path)
+    video_path = render_reel_video(category_tag, title, point_1, point_2, share_line,
+                                    out_path, background_paths={"hook": "...", ...})
 """
 
 import os
 import subprocess
 import tempfile
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(HERE, "fonts")
@@ -64,6 +69,42 @@ def vertical_gradient(size, top_color, bottom_color):
         b = int(top_color[2] + (bottom_color[2] - top_color[2]) * ratio)
         draw.line([(0, y), (w, y)], fill=(r, g, b))
     return base
+
+
+def apply_vignette(img):
+    """Assombrit le haut et le bas de l'image (la ou vivent le bandeau de marque et
+    le pied de page) pour garder le texte lisible par-dessus une illustration de
+    fond, tout en laissant la bande centrale plus claire."""
+    w, h = img.size
+    overlay = Image.new("L", (w, h), 0)
+    odraw = ImageDraw.Draw(overlay)
+    top_h = int(h * 0.40)
+    bottom_h = int(h * 0.32)
+    for y in range(top_h):
+        alpha = int(190 * (1 - y / top_h))
+        odraw.line([(0, y), (w, y)], fill=alpha)
+    for y in range(bottom_h):
+        yy = h - 1 - y
+        alpha = int(190 * (1 - y / bottom_h))
+        odraw.line([(0, yy), (w, yy)], fill=alpha)
+    dark = Image.new("RGB", (w, h), (10, 16, 28))
+    return Image.composite(dark, img, overlay)
+
+
+def draw_background(background_path):
+    """Fond plein cadre a partir d'une illustration generee par IA (voir
+    generate_scene_illustrations.py), melangee avec le degrade navy de marque puis
+    assombrie sur les bords (vignette) pour que le texte blanc/dore reste lisible
+    par-dessus. Renvoie None si l'image ne peut pas etre chargee (fichier absent,
+    corrompu...) : l'appelant retombe alors sur le degrade navy uni, jamais bloquant."""
+    try:
+        img = Image.open(background_path).convert("RGB")
+    except Exception:
+        return None
+    img = ImageOps.fit(img, (W, H), method=Image.LANCZOS)
+    gradient = vertical_gradient((W, H), NAVY, NAVY2)
+    blended = Image.blend(img, gradient, alpha=0.45)
+    return apply_vignette(blended)
 
 
 def wrap_text_to_width(draw, text, font, max_width):
@@ -140,8 +181,12 @@ def draw_chrome(draw, category_tag):
     return logo_resized
 
 
-def new_canvas(category_tag):
-    img = vertical_gradient((W, H), NAVY, NAVY2)
+def new_canvas(category_tag, background_path=None):
+    img = None
+    if background_path:
+        img = draw_background(background_path)
+    if img is None:
+        img = vertical_gradient((W, H), NAVY, NAVY2)
     draw = ImageDraw.Draw(img)
     logo = draw_chrome(draw, category_tag)
     if logo is not None:
@@ -168,7 +213,8 @@ BASE_FINAL_HOLD = 1.3  # temps de lecture mini une fois TOUT le texte de la scen
 READ_HOLD_PER_LINE = 0.85  # temps de lecture supplementaire par ligne de texte (scenes plus longues = tenues plus longtemps)
 
 
-def _reveal_stages(category_tag, label, lines, font, line_h, color, top_y=CONTENT_TOP):
+def _reveal_stages(category_tag, label, lines, font, line_h, color, top_y=CONTENT_TOP,
+                    background_path=None):
     """Construit les etats cles d'une scene : d'abord l'etiquette seule (si fournie),
     puis le texte qui apparait ligne par ligne, avec un temps de lecture final
     proportionnel a la longueur du texte (un texte plus long reste plus longtemps a
@@ -178,12 +224,12 @@ def _reveal_stages(category_tag, label, lines, font, line_h, color, top_y=CONTEN
     final_hold = BASE_FINAL_HOLD + READ_HOLD_PER_LINE * n_total
 
     if label:
-        img, draw = new_canvas(category_tag)
+        img, draw = new_canvas(category_tag, background_path=background_path)
         draw_tag_pill(draw, label, W // 2, top_y)
         stages.append((img, LABEL_HOLD, 0.15))
 
     for n in range(1, n_total + 1):
-        img, draw = new_canvas(category_tag)
+        img, draw = new_canvas(category_tag, background_path=background_path)
         y = top_y
         if label:
             y = draw_tag_pill(draw, label, W // 2, y) + 60
@@ -196,16 +242,18 @@ def _reveal_stages(category_tag, label, lines, font, line_h, color, top_y=CONTEN
     return stages
 
 
-def _scene_hook(category_tag, title):
+def _scene_hook(category_tag, title, background_path=None):
     font, lines, line_h = fit_font(title, FONT_TITLE, CONTENT_MAX_W, max_height=460,
                                     start_size=92, min_size=54)
-    return _reveal_stages(category_tag, None, lines, font, line_h, OFF_WHITE, top_y=CONTENT_TOP)
+    return _reveal_stages(category_tag, None, lines, font, line_h, OFF_WHITE, top_y=CONTENT_TOP,
+                           background_path=background_path)
 
 
-def _scene_point(category_tag, label, text):
+def _scene_point(category_tag, label, text, background_path=None):
     font, lines, line_h = fit_font(text, FONT_SUBTITLE, CONTENT_MAX_W, max_height=380,
                                     start_size=58, min_size=38)
-    return _reveal_stages(category_tag, label, lines, font, line_h, OFF_WHITE, top_y=CONTENT_TOP + 40)
+    return _reveal_stages(category_tag, label, lines, font, line_h, OFF_WHITE, top_y=CONTENT_TOP + 40,
+                           background_path=background_path)
 
 
 CTA_SHARE_READ_BONUS = 0.35   # temps de lecture supplementaire par ligne pour la phrase de partage
@@ -214,7 +262,7 @@ CTA_OUTRO_BONUS = 0.9         # temps supplementaire pour l'etape finale (outro)
                               # l'action complet et, le cas echeant, de faire l'action (transferer)
 
 
-def _scene_cta(category_tag, share_line):
+def _scene_cta(category_tag, share_line, background_path=None):
     """Meme logique de reveal que _reveal_stages (etapes intermediaires courtes, etape
     finale tenue proportionnellement a la quantite de texte a lire), mais geree a la main
     ici car la scene CTA empile plusieurs elements de nature differente (titre, phrase de
@@ -237,7 +285,7 @@ def _scene_cta(category_tag, share_line):
     # Etape 1..N : titre revele ligne par ligne (encore une etape a venir ensuite :
     # la phrase de partage et/ou le sous-titre, donc tenue courte comme dans _reveal_stages).
     for n in range(1, n_title + 1):
-        img, draw = new_canvas(category_tag)
+        img, draw = new_canvas(category_tag, background_path=background_path)
         y = CONTENT_TOP + 60
         for line in title_lines[:n]:
             draw.text((W // 2, y), line, font=title_font, fill=OFF_WHITE, anchor="ma")
@@ -249,7 +297,7 @@ def _scene_cta(category_tag, share_line):
     # Etape suivante : la phrase de partage (doree) apparait, tenue un peu plus longtemps
     # (c'est une information a part entiere, pas juste une ligne de titre de plus).
     if share_lines:
-        img, draw = new_canvas(category_tag)
+        img, draw = new_canvas(category_tag, background_path=background_path)
         y = CONTENT_TOP + 60
         for line in title_lines:
             draw.text((W // 2, y), line, font=title_font, fill=OFF_WHITE, anchor="ma")
@@ -265,7 +313,7 @@ def _scene_cta(category_tag, share_line):
     # Etape finale : le sous-titre d'invitation apparait. C'est l'outro de tout le Reel :
     # tenue la plus longue, proportionnelle a la quantite totale de texte affiche a l'ecran
     # a ce moment-la (titre + partage + sous-titre), pour laisser le temps de tout lire.
-    img, draw = new_canvas(category_tag)
+    img, draw = new_canvas(category_tag, background_path=background_path)
     y = CONTENT_TOP + 60
     for line in title_lines:
         draw.text((W // 2, y), line, font=title_font, fill=OFF_WHITE, anchor="ma")
@@ -285,12 +333,20 @@ def _scene_cta(category_tag, share_line):
     return stages
 
 
-def build_keyframes(category_tag, title, point_1, point_2, share_line):
+def build_keyframes(category_tag, title, point_1, point_2, share_line, background_paths=None):
+    """background_paths (optionnel) : dict {"hook": chemin, "mechanism": chemin,
+    "answer": chemin}, une illustration par scene principale (voir
+    generate_scene_illustrations.py). Une cle absente ou a None retombe simplement
+    sur le degrade navy uni pour cette scene-la. La scene CTA finale reutilise
+    l'illustration "answer" (pas de 4e image generee separement)."""
+    background_paths = background_paths or {}
     keyframes = []
-    keyframes += _scene_hook(category_tag, title)
-    keyframes += _scene_point(category_tag, "LE MECANISME", point_1)
-    keyframes += _scene_point(category_tag, "LA REPONSE", point_2)
-    keyframes += _scene_cta(category_tag, share_line)
+    keyframes += _scene_hook(category_tag, title, background_path=background_paths.get("hook"))
+    keyframes += _scene_point(category_tag, "LE MECANISME", point_1,
+                               background_path=background_paths.get("mechanism"))
+    keyframes += _scene_point(category_tag, "LA REPONSE", point_2,
+                               background_path=background_paths.get("answer"))
+    keyframes += _scene_cta(category_tag, share_line, background_path=background_paths.get("answer"))
     # La toute premiere image de la video ne doit pas fondre depuis rien.
     if keyframes:
         img0, hold0, _ = keyframes[0]
@@ -318,13 +374,14 @@ def _expand_to_frames(keyframes, fps=FPS):
 
 
 def render_reel_video(category_tag, title, point_1, point_2, share_line, out_path,
-                       fps=FPS):
+                       fps=FPS, background_paths=None):
     """Fabrique la video silencieuse (sans musique : ajoutee ensuite par
-    generate_klarimo_reel.py) du Reel Klarimo, dans le nouveau style "reveal
-    progressif". Renvoie out_path. Ne masque pas les erreurs : c'est a l'appelant de
-    decider quoi faire en cas d'echec (voir le mecanisme de secours dans
-    generate_klarimo_reel.py)."""
-    keyframes = build_keyframes(category_tag, title, point_1, point_2, share_line)
+    generate_klarimo_reel.py) du Reel Klarimo, dans le style "reveal progressif",
+    avec ou sans illustrations de fond (voir background_paths dans build_keyframes).
+    Renvoie out_path. Ne masque pas les erreurs : c'est a l'appelant de decider quoi
+    faire en cas d'echec (voir le mecanisme de secours dans generate_klarimo_reel.py)."""
+    keyframes = build_keyframes(category_tag, title, point_1, point_2, share_line,
+                                 background_paths=background_paths)
     frames = _expand_to_frames(keyframes, fps=fps)
     total_duration = len(frames) / fps
 
