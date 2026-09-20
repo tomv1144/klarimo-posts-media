@@ -1,18 +1,22 @@
 """
 Klarimo - Rendu du Reel par l'API OpenAI (code interpreter)
 ====================================================================================
-Envoie a l'API OpenAI (modele gpt-6-astra, outil "code_interpreter") le moteur de
-rendu klarimo_motion.py ainsi que les polices et le logo Klarimo, avec pour
-instruction de l'executer (ou de l'ameliorer legerement, sans changer le style de
-marque) pour produire la video verticale du jour, silencieuse, a partir du contenu
-fourni (titre, mecanisme, reponse, phrase de partage).
+Envoie a l'API OpenAI (modele gpt-6-astra, outil "code_interpreter") le contenu du
+jour (titre, mecanisme, reponse, phrase de partage) ainsi que les polices, le logo
+et un exemple de gabarit (klarimo_motion.py) donnes comme REFERENCE, pas comme
+moule obligatoire. La consigne envoyee au modele lui laisse volontairement la main
+sur la mise en scene (illustrations, photos stylisees, animations...), a
+l'image des Reels Klarimo qu'il a deja produits ("Le calcul incomplet") : seules
+la palette de couleurs, les polices, la presence du logo et le texte du contenu
+sont imposes, pas le style visuel.
 
 POURQUOI passer par OpenAI plutot que de simplement executer klarimo_motion.py
 localement : Tom a explicitement demande que ce soit l'IA d'OpenAI qui "realise"
-les videos (le travail de recherche/fact-checking reste, lui, inchange sur Claude).
-Cela laisse aussi a OpenAI une petite marge de creativite sur le rythme/les
-transitions si elle en identifie un meilleur, tant que l'habillage de marque
-(couleurs, polices, bandeau, pied de page) reste identique.
+les videos, avec une vraie liberte creative sur le rendu (le travail de
+recherche/fact-checking reste, lui, inchange sur Claude). klarimo_motion.py n'est
+QUE le moteur de secours local (voir plus bas) : il ne doit pas etre presente a
+OpenAI comme la cible a reproduire, sinon on perd tout l'interet de lui laisser
+"realiser" la video.
 
 IMPORTANT (fiabilite) : ce mecanisme est EXPERIMENTAL. La documentation d'OpenAI
 elle-meme decrit la recuperation des fichiers produits par le code interpreter
@@ -125,30 +129,46 @@ def _upload_all_assets(api_key, timeout):
 
 def _build_instructions(category_tag, title, point_1, point_2, share_line):
     return f"""
-Tu es un generateur de video pour Klarimo, cabinet independant de conseil en
-immobilier patrimonial (France). Utilise ton outil code_interpreter (Python, avec
-Pillow et ffmpeg disponibles) pour produire UNE video verticale (1080x1920, 30
-images/seconde, format mp4, SANS SON) qui reprend fidelement le style du fichier
-klarimo_motion.py joint : habillage de marque persistant (bandeau KLARIMO +
-categorie en haut, barre de progression, pied de page) et reveal progressif du
-texte scene par scene.
+Tu es en charge de la realisation creative d'un Reel pour Klarimo, cabinet
+independant de conseil en immobilier patrimonial (France). Utilise ton outil
+code_interpreter (Python, avec Pillow et ffmpeg disponibles) pour produire UNE
+video verticale (1080x1920, format mp4, SANS SON) a partir du contenu ci-dessous.
 
-La methode la plus simple et la plus fiable : place klarimo_motion.py, les 4
-polices jointes et le logo joint dans le meme dossier, adapte au besoin les
-constantes FONT_DIR/LOGO_PATH en tete de fichier pour qu'elles pointent vers ces
-fichiers, puis appelle sa fonction render_reel_video(category_tag, title,
-point_1, point_2, share_line, out_path) avec le contenu du jour ci-dessous. Tu
-peux ameliorer legerement le rythme ou les transitions si tu identifies un moyen
-de rendre le rendu plus vivant, MAIS tu dois impérativement conserver : les
-memes couleurs (bleu marine, or, blanc casse), les memes polices, le bandeau de
-marque en haut, le pied de page en bas, la barre de progression, et le texte
-fourni ci-dessous tel quel (ne le reformule jamais).
+C'est TOI qui decides de la mise en scene : illustrations, photos stylisees,
+formes animees, melange de texte et d'elements visuels... tout est possible,
+dans le meme esprit que les Reels Klarimo que tu as deja realises par le passe
+("Le calcul incomplet" par exemple). Tu n'es surtout pas oblige de te limiter a
+du texte seul sur fond uni : une video plus vivante, avec de vraies illustrations
+ou photos stylisees en plus du texte, est encouragee si tu penses que ca sert
+mieux le sujet du jour.
 
+Contraintes de marque a respecter (les seules obligatoires) :
+- Palette : bleu marine profond, or/dore, blanc casse (coherent avec le logo et
+  les polices joints).
+- Si tu affiches du texte, utilise les polices jointes (CormorantGaramond-SemiBold
+  pour les titres/accroches, la famille DMSans pour le reste).
+- Le logo Klarimo joint doit apparaitre au moins une fois dans la video (par
+  exemple en pied de page ou en marque d'eau discrete).
+- Jamais de texte, chiffre ou logo illisible ou deforme genere par erreur dans
+  une image que tu generes toi-meme.
+- Ton sobre, soigne et professionnel : c'est une marque de conseil patrimonial
+  haut de gamme, pas une publicite criarde.
+- Le texte du contenu ci-dessous doit apparaitre a l'ecran tel quel (ne le
+  reformule pas), mais TU choisis comment, quand et avec quels visuels il
+  apparait.
+
+Si tu veux un point de depart technique rapide, un fichier klarimo_motion.py est
+joint : il contient un exemple deja utilise par Klarimo (bandeau de marque
+persistant + texte qui apparait progressivement). Tu peux t'en inspirer, l'adapter,
+ou t'en eloigner completement si tu as une meilleure idee pour ce sujet precis :
+ce n'est qu'une reference parmi d'autres, pas un moule a repliquer.
+
+Contenu du jour :
 Categorie : {category_tag}
-Titre (accroche, scene 1) : {title}
-Le mecanisme (scene 2) : {point_1}
-La reponse (scene 3) : {point_2}
-Phrase de partage / CTA (scene 4) : {share_line}
+Titre (accroche) : {title}
+Le mecanisme : {point_1}
+La reponse : {point_2}
+Phrase de partage / CTA finale : {share_line}
 
 Une fois la video produite, elle doit etre le seul fichier .mp4 present dans ton
 repertoire de sortie, pour que je puisse la recuperer automatiquement ensuite.
