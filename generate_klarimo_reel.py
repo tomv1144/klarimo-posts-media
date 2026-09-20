@@ -26,27 +26,45 @@ import subprocess
 import tempfile
 
 from generate_video_openai import generate_video_openai
+from generate_scene_illustrations import generate_scene_illustrations
 from klarimo_motion import render_reel_video
 from generate_music import generate_background_music
 
 
 def generate_klarimo_reel(category_tag, title, point_1, point_2, share_line, out_dir, seed=0):
     """Ne laisse dans out_dir QUE la vidéo finale (reel.mp4) : les fichiers
-    intermédiaires (vidéo silencieuse, musique) sont fabriqués dans un dossier
-    temporaire et supprimés ensuite, pour ne pas alourdir inutilement le dépôt
-    GitHub.
+    intermédiaires (vidéo silencieuse, musique, illustrations) sont fabriqués
+    dans un dossier temporaire et supprimés ensuite, pour ne pas alourdir
+    inutilement le dépôt GitHub.
 
     share_line : courte phrase affichée sur la dernière scène qui invite à
-    transférer le Reel à une personne concernée (voir klarimo_motion._scene_cta)."""
+    transférer le Reel à une personne concernée (voir klarimo_motion._scene_cta).
+
+    Avant le rendu, on tente de générer jusqu'à 3 illustrations réelles (une par
+    scène) via l'API OpenAI (voir generate_scene_illustrations.py). Si cette
+    étape échoue partiellement ou totalement (pas de clé, panne...), les scènes
+    concernées retombent simplement sur le fond navy uni habituel : la
+    publication n'est jamais bloquée par cette étape."""
     os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         silent_video = os.path.join(tmp, "silent.mp4")
+        images_dir = os.path.join(tmp, "illustrations")
+
+        image_paths = {}
+        try:
+            image_paths = generate_scene_illustrations(
+                category_tag, title, point_1, point_2, share_line, images_dir,
+            )
+        except Exception as exc:  # noqa: BLE001 - jamais bloquant, voir docstring du module
+            print(f"AVERTISSEMENT : génération des illustrations a levé une exception inattendue ({exc}).")
+            image_paths = {}
 
         rendered = None
         try:
             rendered = generate_video_openai(
                 category_tag, title, point_1, point_2, share_line, silent_video,
+                image_paths=image_paths,
             )
         except Exception as exc:  # noqa: BLE001 - jamais bloquant, voir docstring du module
             print(f"AVERTISSEMENT : rendu OpenAI a levé une exception inattendue ({exc}). Repli local.")
@@ -56,7 +74,10 @@ def generate_klarimo_reel(category_tag, title, point_1, point_2, share_line, out
             print("Reel rendu par l'API OpenAI.")
         else:
             print("Rendu OpenAI indisponible ce cycle -> rendu local (klarimo_motion.py).")
-            render_reel_video(category_tag, title, point_1, point_2, share_line, silent_video)
+            render_reel_video(
+                category_tag, title, point_1, point_2, share_line, silent_video,
+                background_paths=image_paths,
+            )
 
         # Durée réelle de la vidéo silencieuse (nécessaire pour caler la musique),
         # qu'elle vienne d'OpenAI ou du moteur local : on la lit directement dans
